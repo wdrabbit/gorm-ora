@@ -1,6 +1,7 @@
 package oracle
 
 import (
+	"database/sql"
 	"fmt"
 	"strings"
 
@@ -242,4 +243,124 @@ func (m Migrator) TryQuotifyReservedWords(values []interface{}) error {
 		}
 		return nil
 	})
+}
+func (m Migrator) CurrentSchema(stmt *gorm.Statement, table string) (string, string) {
+	if tables := strings.Split(table, `.`); len(tables) == 2 {
+		return tables[0], tables[1]
+	}
+	m.DB = m.DB.Table(table)
+	return m.CurrentDatabase(), strings.ToUpper(table)
+}
+
+// ColumnTypes column types return columnTypes,error
+func (m Migrator) ColumnTypes(value interface{}) ([]gorm.ColumnType, error) {
+	columnTypes := make([]gorm.ColumnType, 0)
+	err := m.RunWithValue(value, func(stmt *gorm.Statement) error {
+		var (
+			_, table      = m.CurrentSchema(stmt, stmt.Table)
+			columnTypeSQL = "SELECT COLUMN_NAME, DATA_DEFAULT, DECODE(NULLABLE,'Y',1,0), DATA_TYPE, CHAR_LENGTH, DATA_PRECISION,  DATA_SCALE "
+			rows, err     = m.DB.Session(&gorm.Session{}).Table(table).Limit(1).Rows()
+		)
+
+		if err != nil {
+			return err
+		}
+
+		rawColumnTypes, err := rows.ColumnTypes()
+
+		if err != nil {
+			return err
+		}
+
+		if err := rows.Close(); err != nil {
+			return err
+		}
+
+		// if !m.DisableDatetimePrecision {
+		// 	columnTypeSQL += ", datetime_precision "
+		// }
+		columnTypeSQL += "FROM USER_TAB_COLUMNS WHERE TABLE_NAME = ? ORDER BY COLUMN_ID"
+
+		columns, rowErr := m.DB.Table(table).Raw(columnTypeSQL, table).Rows()
+		if rowErr != nil {
+			return rowErr
+		}
+
+		defer columns.Close()
+
+		for columns.Next() {
+			var (
+				column            migrator.ColumnType
+				datetimePrecision sql.NullInt64
+				// extraValue        sql.NullString
+				// columnKey         sql.NullString
+				values = []interface{}{
+					&column.NameValue,
+					&column.DefaultValueValue,
+					&column.NullableValue,
+					&column.DataTypeValue,
+					&column.LengthValue,
+					// &column.ColumnTypeValue,
+					// &columnKey,
+					// &extraValue,
+					// &column.CommentValue,
+					&column.DecimalSizeValue,
+					&column.ScaleValue,
+				}
+			)
+
+			// if !m.DisableDatetimePrecision {
+			// 	values = append(values, &datetimePrecision)
+			// }
+
+			if scanErr := columns.Scan(values...); scanErr != nil {
+				return scanErr
+			}
+
+			column.PrimaryKeyValue = sql.NullBool{Bool: false, Valid: true}
+			column.UniqueValue = sql.NullBool{Bool: false, Valid: true}
+			// switch columnKey.String {
+			// case "PRI":
+			// 	column.PrimaryKeyValue = sql.NullBool{Bool: true, Valid: true}
+			// case "UNI":
+			// 	column.UniqueValue = sql.NullBool{Bool: true, Valid: true}
+			// }
+
+			// if strings.Contains(extraValue.String, "auto_increment") {
+			// 	column.AutoIncrementValue = sql.NullBool{Bool: true, Valid: true}
+			// }
+
+			// only trim paired single-quotes
+			s := column.DefaultValueValue.String
+			for (len(s) >= 3 && s[0] == '\'' && s[len(s)-1] == '\'' && s[len(s)-2] != '\\') ||
+				(len(s) == 2 && s == "''") {
+				s = s[1 : len(s)-1]
+			}
+			column.DefaultValueValue.String = s
+			// if m.Dialector.DontSupportNullAsDefaultValue {
+			// 	// rewrite mariadb default value like other version
+			// 	if column.DefaultValueValue.Valid && column.DefaultValueValue.String == "NULL" {
+			// 		column.DefaultValueValue.Valid = false
+			// 		column.DefaultValueValue.String = ""
+			// 	}
+			// }
+
+			if datetimePrecision.Valid {
+				column.DecimalSizeValue = datetimePrecision
+			}
+
+			for _, c := range rawColumnTypes {
+				if c.Name() == column.NameValue.String {
+					column.SQLColumnType = c
+					break
+				}
+			}
+
+			columnTypes = append(columnTypes, column)
+		}
+
+		return nil
+	})
+
+	return columnTypes, err
 }
