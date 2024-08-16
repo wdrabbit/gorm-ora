@@ -258,7 +258,7 @@ func (m Migrator) ColumnTypes(value interface{}) ([]gorm.ColumnType, error) {
 	err := m.RunWithValue(value, func(stmt *gorm.Statement) error {
 		var (
 			_, table      = m.CurrentSchema(stmt, stmt.Table)
-			columnTypeSQL = "SELECT COLUMN_NAME, DATA_DEFAULT, DECODE(NULLABLE,'Y',1,0), DATA_TYPE, CHAR_LENGTH, DATA_PRECISION,  DATA_SCALE "
+			columnTypeSQL = "SELECT COLUMN_NAME, DATA_DEFAULT, DECODE(NULLABLE,'Y',1,0), DATA_TYPE, CHAR_LENGTH, DATA_PRECISION, DATA_SCALE "
 			rows, err     = m.DB.Session(&gorm.Session{}).Table(table).Limit(1).Rows()
 		)
 
@@ -281,7 +281,7 @@ func (m Migrator) ColumnTypes(value interface{}) ([]gorm.ColumnType, error) {
 		// }
 		columnTypeSQL += "FROM USER_TAB_COLUMNS WHERE TABLE_NAME = ? ORDER BY COLUMN_ID"
 
-		columns, rowErr := m.DB.Table(table).Raw(columnTypeSQL, table).Rows()
+		columns, rowErr := m.DB.Debug().Table(table).Raw(columnTypeSQL, table).Rows()
 		if rowErr != nil {
 			return rowErr
 		}
@@ -355,6 +355,7 @@ func (m Migrator) ColumnTypes(value interface{}) ([]gorm.ColumnType, error) {
 					break
 				}
 			}
+			column.NameValue.String = strings.ToLower(column.NameValue.String)
 
 			columnTypes = append(columnTypes, column)
 		}
